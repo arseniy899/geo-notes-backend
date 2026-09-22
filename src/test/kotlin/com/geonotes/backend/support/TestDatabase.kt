@@ -48,7 +48,7 @@ object TestDatabase {
     val database: Database by lazy { DatabaseFactory.connect(dataSource) }
 
     private val tables = listOf(
-        "events", "share_recipients", "shares", "friendships", "invites", "entitlements", "devices", "users",
+        "events", "share_request_keys", "share_requests", "share_owner_keys", "share_recipients", "shares", "friendships", "invites", "entitlements", "devices", "users",
     )
 
     /** Wipes all data between tests (schema is kept). */

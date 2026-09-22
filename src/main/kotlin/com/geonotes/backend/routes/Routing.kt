@@ -28,6 +28,7 @@ fun Application.configureRouting(module: AppModule) {
                 deviceRoutes(module.devicesController)
                 friendRoutes(module.friendsController)
                 shareRoutes(module.sharesController)
+                shareRequestRoutes(module.shareRequestsController)
                 eventRoutes(module.eventsController)
                 entitlementRoutes(module.entitlementsController)
             }

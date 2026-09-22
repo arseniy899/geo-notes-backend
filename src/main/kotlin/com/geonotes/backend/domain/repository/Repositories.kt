@@ -8,6 +8,9 @@ import com.geonotes.backend.domain.model.FriendPair
 import com.geonotes.backend.domain.model.Invite
 import com.geonotes.backend.domain.model.ReceivedShare
 import com.geonotes.backend.domain.model.Share
+import com.geonotes.backend.domain.model.ShareRequest
+import com.geonotes.backend.domain.model.ShareRequestStatus
+import com.geonotes.backend.domain.model.ShareRequestView
 import com.geonotes.backend.domain.model.User
 import com.geonotes.backend.domain.model.UserId
 import java.time.Instant
@@ -67,6 +70,20 @@ interface ShareRepository {
     suspend fun delete(id: UUID): Boolean
     /** Removes recipient rows linking the two users in either direction (used on unfriend). */
     suspend fun removeRecipientsBetween(userA: UserId, userB: UserId): Int
+}
+
+interface ShareRequestRepository {
+    suspend fun create(request: ShareRequest): ShareRequest
+    suspend fun find(id: UUID): ShareRequest?
+    /** Requests where [userId] is requester or target and that have not expired at [now]. */
+    suspend fun listForUser(userId: UserId, now: Instant): List<ShareRequestView>
+    suspend fun countPendingOutgoing(requesterId: UserId, now: Instant): Int
+    /** Moves a PENDING request to [status]. Returns false if it was no longer pending (race). */
+    suspend fun resolve(id: UUID, status: ShareRequestStatus, shareId: UUID?, now: Instant): Boolean
+    suspend fun delete(id: UUID): Boolean
+    /** Removes PENDING requests between the two users in either direction (used on unfriend). */
+    suspend fun deletePendingBetween(userA: UserId, userB: UserId): Int
+    suspend fun deleteExpired(now: Instant): Int
 }
 
 interface EventRepository {

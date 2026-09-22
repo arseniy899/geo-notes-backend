@@ -11,6 +11,7 @@ import kotlin.time.Duration.Companion.minutes
 
 val RATE_LIMIT_EVENTS = RateLimitName("events")
 val RATE_LIMIT_INVITES = RateLimitName("invites")
+val RATE_LIMIT_SHARE_REQUESTS = RateLimitName("share_requests")
 
 fun Application.configureRateLimit(config: RateLimitConfig) {
     install(RateLimit) {
@@ -20,6 +21,10 @@ fun Application.configureRateLimit(config: RateLimitConfig) {
         }
         register(RATE_LIMIT_INVITES) {
             rateLimiter(limit = config.invitesPerMinute, refillPeriod = 1.minutes)
+            requestKey { call -> call.principal<UserPrincipal>()?.uid ?: call.request.origin.remoteHost }
+        }
+        register(RATE_LIMIT_SHARE_REQUESTS) {
+            rateLimiter(limit = config.shareRequestsPerMinute, refillPeriod = 1.minutes)
             requestKey { call -> call.principal<UserPrincipal>()?.uid ?: call.request.origin.remoteHost }
         }
     }

@@ -12,6 +12,10 @@ info:
     (`sealedKey`) using that device's public key. The *owner's* device evaluates the geofence locally
     and posts only `{shareId, transition, occurredAt}`; the server fans that out as an FCM data message.
 
+    **Share requests** let the *watcher* start the flow: they encrypt the place, seal the content key to
+    the friend's devices (`ownerKeys`) and to their own devices (`recipientKeys`) and ask the friend to
+    share. Only when the friend accepts does an active share (owned by the friend) exist.
+
     All `/v1` endpoints require `Authorization: Bearer <Firebase ID token>`
     (or `Bearer dev:<uid>` when the server runs with `AUTH_MODE=dev`).
     Binary fields are base64. Timestamps are ISO-8601 UTC instants.
@@ -27,6 +31,7 @@ tags:
   - name: devices
   - name: friends
   - name: shares
+  - name: share-requests
   - name: events
   - name: entitlements
   - name: play
@@ -175,6 +180,69 @@ paths:
         "204": { description: Deleted }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+
+  /v1/share-requests:
+    post:
+      tags: [share-requests]
+      summary: Ask a friend to share their arrivals/departures at an encrypted place
+      description: |
+        The caller is the **watcher** (future recipient); `toUserId` is the friend who would own the share
+        and whose device would evaluate the geofence. Requires an accepted friendship. Every `ownerKeys`
+        device must belong to `toUserId`, every `recipientKeys` device to the caller. The request is
+        `PENDING` for 7 days. The friend's devices receive an FCM data message
+        `{"type":"share_request","requestId":"…","fromUserId":"…"}`.
+        Rate limited per user (`RATE_LIMIT_SHARE_REQUESTS_PER_MINUTE`, default 20/min); at most 50 pending
+        outgoing requests.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateShareRequestRequest" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ShareRequest" } } } }
+        "400": { description: "`validation_failed` | `share_request_self` | `share_request_device_invalid`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: "`not_a_friend`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "`user_not_registered`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "`share_request_limit_reached`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [share-requests]
+      summary: Incoming and outgoing share requests that have not expired
+      description: "`ownerKeys` is filled only for incoming requests and only with the caller's own devices."
+      responses:
+        "200": { description: Share requests, content: { application/json: { schema: { $ref: "#/components/schemas/ShareRequests" } } } }
+  /v1/share-requests/{id}/accept:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [share-requests]
+      summary: Accept (target only) → creates an active share owned by the caller
+      description: |
+        The new share's recipients are the requester's devices (`recipientKeys` reused) and its `ownerKeys`
+        are the caller's devices' sealed keys. Counts toward the 20 active shares per owner. The requester's
+        devices receive `{"type":"share_request_accepted","requestId":"…","shareId":"…","fromUserId":"…"}`.
+      responses:
+        "200": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/AcceptShareRequestResult" } } } }
+        "403": { description: "`not_share_request_target` | `not_a_friend`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "`share_request_not_found`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "`share_request_not_pending` | `share_request_expired` | `recipient_device_invalid`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "`share_limit_reached`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /v1/share-requests/{id}/decline:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [share-requests]
+      summary: Decline (target only). No push is sent to the requester.
+      responses:
+        "200": { description: Declined, content: { application/json: { schema: { $ref: "#/components/schemas/ShareRequest" } } } }
+        "403": { description: "`not_share_request_target`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "`share_request_not_found`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "`share_request_not_pending` | `share_request_expired`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /v1/share-requests/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    delete:
+      tags: [share-requests]
+      summary: Cancel (requester only). A share already created from the request is not affected.
+      responses:
+        "204": { description: Deleted }
+        "403": { description: "`not_share_requester`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "`share_request_not_found`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /v1/events:
     post:
@@ -386,11 +454,59 @@ components:
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         recipients: { type: array, items: { $ref: "#/components/schemas/ShareRecipient" } }
+        ownerKeys:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceSealedKey" }
+          description: Owner view only. Content key sealed to the owner's devices (shares created from a share request). Empty in the recipient view.
     Shares:
       type: object
       properties:
         owned: { type: array, items: { $ref: "#/components/schemas/Share" } }
         received: { type: array, items: { $ref: "#/components/schemas/Share" } }
+    DeviceSealedKey:
+      type: object
+      required: [deviceId, sealedKey]
+      properties:
+        deviceId: { type: string }
+        sealedKey: { type: string, format: byte, description: Content key sealed to the device public key }
+    CreateShareRequestRequest:
+      type: object
+      required: [toUserId, encryptedPlace, ownerKeys, recipientKeys]
+      properties:
+        toUserId: { type: string, description: The friend asked to share (future share owner) }
+        encryptedPlace: { type: string, format: byte, description: "Client-side encrypted place (≤ 8 KiB)" }
+        ownerKeys: { type: array, minItems: 1, maxItems: 50, items: { $ref: "#/components/schemas/DeviceSealedKey" }, description: "Sealed to each of the friend's devices" }
+        recipientKeys: { type: array, minItems: 1, maxItems: 50, items: { $ref: "#/components/schemas/DeviceSealedKey" }, description: "Sealed to each of the caller's own devices" }
+        transitions: { type: array, minItems: 1, maxItems: 2, items: { $ref: "#/components/schemas/Transition" }, default: [ENTER] }
+        note: { type: [string, "null"], maxLength: 140, description: "Optional plaintext message to the friend. Clients must not put place data here." }
+    ShareRequest:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        direction: { type: string, enum: [INCOMING, OUTGOING] }
+        fromUserId: { type: string }
+        fromDisplayName: { type: string }
+        toUserId: { type: string }
+        toDisplayName: { type: string }
+        encryptedPlace: { type: string, format: byte }
+        transitions: { type: array, items: { $ref: "#/components/schemas/Transition" } }
+        note: { type: [string, "null"] }
+        status: { type: string, enum: [PENDING, ACCEPTED, DECLINED] }
+        shareId: { type: [string, "null"], format: uuid, description: Set once accepted }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        ownerKeys: { type: array, items: { $ref: "#/components/schemas/DeviceSealedKey" }, description: "Incoming only: keys sealed to the caller's devices" }
+    ShareRequests:
+      type: object
+      properties:
+        incoming: { type: array, items: { $ref: "#/components/schemas/ShareRequest" } }
+        outgoing: { type: array, items: { $ref: "#/components/schemas/ShareRequest" } }
+    AcceptShareRequestResult:
+      type: object
+      properties:
+        request: { $ref: "#/components/schemas/ShareRequest" }
+        share: { $ref: "#/components/schemas/Share" }
     PostEventRequest:
       type: object
       required: [shareId, transition, occurredAt]

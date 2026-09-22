@@ -48,5 +48,5 @@ fun Application.module(appModule: AppModule) {
     configureAuth(appModule.tokenVerifier, appModule.pubSubTokenVerifier)
     configureRateLimit(appModule.config.rateLimits)
     configureRouting(appModule)
-    configureBackgroundJobs(appModule.eventService, appModule.config.cleanupInterval)
+    configureBackgroundJobs(appModule.eventService, appModule.shareRequestService, appModule.config.cleanupInterval)
 }

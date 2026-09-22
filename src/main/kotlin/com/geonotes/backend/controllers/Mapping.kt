@@ -1,6 +1,7 @@
 package com.geonotes.backend.controllers
 
 import com.geonotes.backend.api.model.DeviceResponse
+import com.geonotes.backend.api.model.DeviceSealedKey
 import com.geonotes.backend.api.model.EntitlementResponse
 import com.geonotes.backend.api.model.FriendResponse
 import com.geonotes.backend.api.model.ShareRecipientResponse
@@ -59,6 +60,7 @@ internal fun Entitlement?.toResponse(now: Instant) = EntitlementResponse(
     lastVerifiedAt = this?.lastVerifiedAt?.toString(),
 )
 
+/** [ownerDisplayName] is set only for the recipient view, which never includes the owner's keys. */
 internal fun Share.toResponse(ownerDisplayName: String? = null) = ShareResponse(
     id = id.toString(),
     ownerId = ownerId,
@@ -70,4 +72,5 @@ internal fun Share.toResponse(ownerDisplayName: String? = null) = ShareResponse(
     createdAt = createdAt.toString(),
     updatedAt = updatedAt.toString(),
     recipients = recipients.map { ShareRecipientResponse(it.userId, it.deviceId, it.sealedKey.b64()) },
+    ownerKeys = if (ownerDisplayName == null) ownerKeys.map { DeviceSealedKey(it.deviceId, it.sealedKey.b64()) } else emptyList(),
 )

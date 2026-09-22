@@ -5,7 +5,7 @@ import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.java.javaUUID
 import org.jetbrains.exposed.v1.javatime.timestampWithTimeZone
 
-/** Exposed mappings of the Flyway-managed schema (see db/migration/). Schema is never auto-created. */
+/** Exposed mappings of the Flyway-managed schema (see db/migration/V*.sql). Schema is never auto-created. */
 object UsersTable : Table("users") {
     val id = varchar("id", 128)
     val displayName = varchar("display_name", 64)
@@ -60,6 +60,37 @@ object ShareRecipientsTable : Table("share_recipients") {
     val userId = reference("user_id", UsersTable.id, onDelete = ReferenceOption.CASCADE)
     val sealedKey = binary("sealed_key")
     override val primaryKey = PrimaryKey(shareId, deviceId)
+}
+
+object ShareOwnerKeysTable : Table("share_owner_keys") {
+    val shareId = reference("share_id", SharesTable.id, onDelete = ReferenceOption.CASCADE)
+    val deviceId = reference("device_id", DevicesTable.id, onDelete = ReferenceOption.CASCADE)
+    val sealedKey = binary("sealed_key")
+    override val primaryKey = PrimaryKey(shareId, deviceId)
+}
+
+object ShareRequestsTable : Table("share_requests") {
+    val id = javaUUID("id")
+    val requesterId = reference("requester_id", UsersTable.id, onDelete = ReferenceOption.CASCADE)
+    val targetId = reference("target_id", UsersTable.id, onDelete = ReferenceOption.CASCADE)
+    val encryptedPlace = binary("encrypted_place")
+    val transitions = varchar("transitions", 32)
+    val note = varchar("note", 140).nullable()
+    val status = varchar("status", 16)
+    val shareId = optReference("share_id", SharesTable.id, onDelete = ReferenceOption.SET_NULL)
+    val createdAt = timestampWithTimeZone("created_at")
+    val updatedAt = timestampWithTimeZone("updated_at")
+    val expiresAt = timestampWithTimeZone("expires_at")
+    override val primaryKey = PrimaryKey(id)
+}
+
+object ShareRequestKeysTable : Table("share_request_keys") {
+    val requestId = reference("request_id", ShareRequestsTable.id, onDelete = ReferenceOption.CASCADE)
+    val deviceId = reference("device_id", DevicesTable.id, onDelete = ReferenceOption.CASCADE)
+    val userId = reference("user_id", UsersTable.id, onDelete = ReferenceOption.CASCADE)
+    val role = varchar("role", 16)
+    val sealedKey = binary("sealed_key")
+    override val primaryKey = PrimaryKey(requestId, deviceId)
 }
 
 object EventsTable : Table("events") {

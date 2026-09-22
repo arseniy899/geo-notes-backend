@@ -1,6 +1,7 @@
 package com.geonotes.backend.plugins
 
 import com.geonotes.backend.api.model.CreateShareRequest
+import com.geonotes.backend.api.model.CreateShareRequestRequest
 import com.geonotes.backend.api.model.PostEventRequest
 import com.geonotes.backend.api.model.PubSubPushRequest
 import com.geonotes.backend.api.model.RegisterDeviceRequest
@@ -34,6 +35,20 @@ fun Application.configureValidation() {
                     r.recipients.all { it.userId.isNotBlank() && it.deviceId.isNotBlank() && it.sealedKey.isNotBlank() },
                     "recipients[].userId, deviceId and sealedKey are required",
                 ),
+            )
+        }
+        validate<CreateShareRequestRequest> { r ->
+            rules(
+                rule(r.toUserId.isNotBlank() && r.toUserId.length <= 128, "toUserId is required"),
+                rule(r.encryptedPlace.isNotBlank() && r.encryptedPlace.length <= 12_000, "encryptedPlace must be base64, max ~8KiB"),
+                rule(r.ownerKeys.isNotEmpty() && r.ownerKeys.size <= 50, "ownerKeys must contain 1..50 entries"),
+                rule(r.recipientKeys.isNotEmpty() && r.recipientKeys.size <= 50, "recipientKeys must contain 1..50 entries"),
+                rule(
+                    (r.ownerKeys + r.recipientKeys).all { it.deviceId.isNotBlank() && it.sealedKey.isNotBlank() },
+                    "deviceId and sealedKey are required for every key",
+                ),
+                rule(r.transitions.isNotEmpty() && r.transitions.size <= 2, "transitions must contain 1..2 entries"),
+                rule(r.note == null || r.note.length <= 140, "note must be at most 140 characters"),
             )
         }
         validate<PostEventRequest> { r ->
