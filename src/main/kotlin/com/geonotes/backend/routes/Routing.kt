@@ -3,6 +3,7 @@ package com.geonotes.backend.routes
 import com.geonotes.backend.AppModule
 import com.geonotes.backend.api.model.HealthResponse
 import com.geonotes.backend.plugins.AUTH_BEARER
+import com.geonotes.backend.plugins.AUTH_PUBSUB
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
@@ -29,6 +30,12 @@ fun Application.configureRouting(module: AppModule) {
                 shareRoutes(module.sharesController)
                 eventRoutes(module.eventsController)
                 entitlementRoutes(module.entitlementsController)
+            }
+        }
+        // Google Play RTDN via Pub/Sub push: authenticated by the push subscription's OIDC token, not a user token.
+        authenticate(AUTH_PUBSUB) {
+            route("/v1") {
+                playNotificationRoutes(module.playNotificationsController)
             }
         }
     }

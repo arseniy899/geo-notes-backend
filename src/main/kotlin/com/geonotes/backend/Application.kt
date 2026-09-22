@@ -32,7 +32,10 @@ fun main() {
 
     embeddedServer(Netty, port = config.port, host = "0.0.0.0") {
         module(appModule)
-        monitor.subscribe(ApplicationStopped) { dataSource.close() }
+        monitor.subscribe(ApplicationStopped) {
+            appModule.close()
+            dataSource.close()
+        }
     }.start(wait = true)
 }
 
@@ -42,7 +45,7 @@ fun Application.module(appModule: AppModule) {
     configureSerialization()
     configureStatusPages()
     configureValidation()
-    configureAuth(appModule.tokenVerifier)
+    configureAuth(appModule.tokenVerifier, appModule.pubSubTokenVerifier)
     configureRateLimit(appModule.config.rateLimits)
     configureRouting(appModule)
     configureBackgroundJobs(appModule.eventService, appModule.config.cleanupInterval)

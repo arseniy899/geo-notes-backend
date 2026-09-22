@@ -1,5 +1,9 @@
 package com.geonotes.backend.domain.model
 
+import com.geonotes.backend.domain.model.EntitlementState.ACTIVE
+import com.geonotes.backend.domain.model.EntitlementState.CANCELED
+import com.geonotes.backend.domain.model.EntitlementState.IN_GRACE_PERIOD
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.UUID
 
@@ -116,13 +120,60 @@ data class FriendEvent(
     val expiresAt: Instant,
 )
 
+/**
+ * Lifecycle of a Google Play purchase as the backend sees it. Mirrors Play's `subscriptionState` /
+ * `purchaseState`, plus backend-only outcomes (REVOKED, REPLACED, INVALID).
+ */
+enum class EntitlementState {
+    /** Subscription active, or one-time (lifetime) product purchased. */
+    ACTIVE,
+    /** Renewal payment failed, user keeps access during the grace period. */
+    IN_GRACE_PERIOD,
+    /** Auto-renew off; access continues until `expiresAt`. */
+    CANCELED,
+    /** Account hold after the grace period: no access. */
+    ON_HOLD,
+    PAUSED,
+    /** Purchase awaiting payment (e.g. cash): no access yet. */
+    PENDING,
+    EXPIRED,
+    /** Refunded / voided / revoked by Google or the developer. */
+    REVOKED,
+    /** Superseded by an upgrade/downgrade (the new token's `linkedPurchaseToken` pointed here). */
+    REPLACED,
+    /** Play does not know the token (404/410/400), or the product is not ours. */
+    INVALID,
+}
+
 data class Entitlement(
     val userId: UserId,
     val productId: String,
+    /**
+     * Raw Play purchase token. Kept because re-verification (GET /v1/entitlements, RTDN) must call the
+     * Play Developer API with it; it is useless without our service-account credentials. Lookups use [tokenHash].
+     */
     val purchaseToken: String,
-    val pro: Boolean,
+    val state: EntitlementState,
     val expiresAt: Instant?,
-    val verifiedAt: Instant,
+    val autoRenewing: Boolean,
+    val acknowledged: Boolean,
+    val testPurchase: Boolean,
+    val lastVerifiedAt: Instant,
 ) {
-    fun isProAt(now: Instant): Boolean = pro && (expiresAt == null || expiresAt.isAfter(now))
+    /** SHA-256 (hex) of [purchaseToken]; unique index, used for RTDN lookups and the one-token-one-account rule. */
+    val tokenHash: String get() = PurchaseTokens.hash(purchaseToken)
+
+    fun isProAt(now: Instant): Boolean = when (state) {
+        ACTIVE, IN_GRACE_PERIOD -> expiresAt == null || expiresAt.isAfter(now)
+        CANCELED -> expiresAt != null && expiresAt.isAfter(now)
+        else -> false
+    }
+
+    /** A lifetime (one-time) purchase that is still valid. */
+    val isLifetime: Boolean get() = state == ACTIVE && expiresAt == null
+}
+
+object PurchaseTokens {
+    fun hash(token: String): String =
+        MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 }

@@ -1,5 +1,6 @@
 package com.geonotes.backend.support
 
+import com.geonotes.backend.domain.ConflictException
 import com.geonotes.backend.domain.model.Device
 import com.geonotes.backend.domain.model.Entitlement
 import com.geonotes.backend.domain.model.Friend
@@ -116,6 +117,12 @@ class InMemoryEventRepository : EventRepository {
 class InMemoryEntitlementRepository : EntitlementRepository {
     val entitlements = linkedMapOf<UserId, Entitlement>()
     override suspend fun find(userId: UserId) = entitlements[userId]
-    override suspend fun findByPurchaseToken(purchaseToken: String) = entitlements.values.firstOrNull { it.purchaseToken == purchaseToken }
-    override suspend fun upsert(entitlement: Entitlement) = entitlement.also { entitlements[it.userId] = it }
+    override suspend fun findByTokenHash(tokenHash: String) = entitlements.values.firstOrNull { it.tokenHash == tokenHash }
+    override suspend fun upsert(entitlement: Entitlement): Entitlement {
+        // Mirrors UNIQUE(token_hash).
+        if (entitlements.values.any { it.tokenHash == entitlement.tokenHash && it.userId != entitlement.userId }) {
+            throw ConflictException("Purchase token already bound to another account", "purchase_token_in_use")
+        }
+        return entitlement.also { entitlements[it.userId] = it }
+    }
 }

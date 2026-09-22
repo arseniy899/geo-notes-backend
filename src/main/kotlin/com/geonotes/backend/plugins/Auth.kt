@@ -1,5 +1,6 @@
 package com.geonotes.backend.plugins
 
+import com.geonotes.backend.auth.PubSubTokenVerifier
 import com.geonotes.backend.auth.TokenVerifier
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -14,6 +15,7 @@ import io.ktor.server.auth.principal
 import io.ktor.server.response.header
 
 const val AUTH_BEARER = "bearer"
+const val AUTH_PUBSUB = "pubsub"
 private const val REALM = "whenhere"
 
 data class UserPrincipal(val uid: String)
@@ -48,17 +50,47 @@ class BearerTokenProvider(config: Config) : AuthenticationProvider(config) {
         }
     }
 
-    private fun ApplicationCall.bearerToken(): String? {
-        val header = request.headers[HttpHeaders.Authorization] ?: return null
-        val parts = header.trim().split(' ', limit = 2)
-        if (parts.size != 2 || !parts[0].equals("Bearer", ignoreCase = true)) return null
-        return parts[1].trim().takeIf { it.isNotEmpty() && it.length <= 8192 }
+}
+
+/** Principal of an authentic Pub/Sub push request (Google Play RTDN). */
+data object PubSubPrincipal
+
+/**
+ * `Authorization: Bearer <OIDC JWT>` sent by a Pub/Sub push subscription, checked by a [PubSubTokenVerifier]
+ * (signature via Google JWKS, issuer, audience, service-account email). Anything else → JSON 401.
+ */
+class PubSubTokenProvider(config: Config) : AuthenticationProvider(config) {
+    private val verifier = config.verifier
+
+    class Config(name: String?) : AuthenticationProvider.Config(name) {
+        lateinit var verifier: PubSubTokenVerifier
+    }
+
+    override suspend fun onAuthenticate(context: AuthenticationContext) {
+        val token = context.call.bearerToken()
+        if (token != null && verifier.verify(token)) {
+            context.principal(name, PubSubPrincipal)
+            return
+        }
+        val cause = if (token == null) AuthenticationFailedCause.NoCredentials else AuthenticationFailedCause.InvalidCredentials
+        context.challenge("PubSub", cause) { challenge, call ->
+            call.respondError(HttpStatusCode.Unauthorized, "unauthorized", "Missing or invalid Pub/Sub push token")
+            challenge.complete()
+        }
     }
 }
 
-fun Application.configureAuth(verifier: TokenVerifier) {
+private fun ApplicationCall.bearerToken(): String? {
+    val header = request.headers[HttpHeaders.Authorization] ?: return null
+    val parts = header.trim().split(' ', limit = 2)
+    if (parts.size != 2 || !parts[0].equals("Bearer", ignoreCase = true)) return null
+    return parts[1].trim().takeIf { it.isNotEmpty() && it.length <= 8192 }
+}
+
+fun Application.configureAuth(verifier: TokenVerifier, pubSubVerifier: PubSubTokenVerifier) {
     install(Authentication) {
         register(BearerTokenProvider(BearerTokenProvider.Config(AUTH_BEARER).apply { this.verifier = verifier }))
+        register(PubSubTokenProvider(PubSubTokenProvider.Config(AUTH_PUBSUB).apply { this.verifier = pubSubVerifier }))
     }
 }
 

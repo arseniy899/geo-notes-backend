@@ -1,9 +1,14 @@
 package com.geonotes.backend
 
 import com.geonotes.backend.auth.DevTokenVerifier
+import com.geonotes.backend.auth.DisabledPubSubTokenVerifier
+import com.geonotes.backend.auth.GooglePubSubTokenVerifier
+import com.geonotes.backend.auth.PubSubTokenVerifier
 import com.geonotes.backend.auth.FirebaseTokenVerifier
 import com.geonotes.backend.auth.TokenVerifier
+import com.geonotes.backend.billing.GooglePlayPurchaseVerifier
 import com.geonotes.backend.billing.PlayPurchaseVerifier
+import com.geonotes.backend.billing.ServiceAccountAccessTokenProvider
 import com.geonotes.backend.billing.StubPlayPurchaseVerifier
 import com.geonotes.backend.config.AppConfig
 import com.geonotes.backend.config.AuthMode
@@ -12,6 +17,7 @@ import com.geonotes.backend.controllers.EntitlementsController
 import com.geonotes.backend.controllers.EventsController
 import com.geonotes.backend.controllers.FriendsController
 import com.geonotes.backend.controllers.MeController
+import com.geonotes.backend.controllers.PlayNotificationsController
 import com.geonotes.backend.controllers.SharesController
 import com.geonotes.backend.domain.service.DeviceService
 import com.geonotes.backend.domain.service.EntitlementService
@@ -33,6 +39,8 @@ import com.geonotes.backend.push.LoggingPushSender
 import com.geonotes.backend.push.PushSender
 import com.google.firebase.FirebaseApp
 import org.jetbrains.exposed.v1.jdbc.Database
+import java.io.Closeable
+import java.io.IOException
 import java.time.Clock
 import java.time.ZoneOffset
 
@@ -45,10 +53,12 @@ class AppModule(
     database: Database,
     val tokenVerifier: TokenVerifier,
     pushSender: PushSender,
-    purchaseVerifier: PlayPurchaseVerifier,
+    private val purchaseVerifier: PlayPurchaseVerifier,
     /** Millisecond ticks: stable round-trips through PostgreSQL (µs precision). */
     val clock: Clock = Clock.tickMillis(ZoneOffset.UTC),
-) {
+    /** Authenticates Google Play RTDN pushes (POST /v1/play/rtdn). Rejects everything unless RTDN is configured. */
+    val pubSubTokenVerifier: PubSubTokenVerifier = DisabledPubSubTokenVerifier,
+) : Closeable {
     // Model: persistence
     private val tx = ExposedTransactionRunner(database)
     private val userRepository = ExposedUserRepository(database)
@@ -84,7 +94,15 @@ class AppModule(
         maxActiveSharesPerOwner = config.maxActiveSharesPerOwner,
     )
     val eventService = EventService(shareService, eventRepository, deviceRepository, inviteRepository, pushSender, clock, config.eventTtl)
-    val entitlementService = EntitlementService(purchaseVerifier, entitlementRepository, userService, clock)
+    val entitlementService = EntitlementService(
+        verifier = purchaseVerifier,
+        entitlements = entitlementRepository,
+        userService = userService,
+        clock = clock,
+        packageName = config.play.packageName,
+        allowTestPurchases = config.play.allowTestPurchases,
+        reverifyAfter = config.play.reverifyAfter,
+    )
 
     // ViewModels
     val meController = MeController(userService, clock)
@@ -93,6 +111,11 @@ class AppModule(
     val sharesController = SharesController(shareService)
     val eventsController = EventsController(eventService)
     val entitlementsController = EntitlementsController(entitlementService, clock)
+    val playNotificationsController = PlayNotificationsController(entitlementService)
+
+    override fun close() {
+        (purchaseVerifier as? Closeable)?.close()
+    }
 
     companion object {
         /** Production wiring from config: picks Firebase or dev auth and FCM or logging push. */
@@ -104,8 +127,30 @@ class AppModule(
                 )
             }
             val pushSender = firebaseApp?.let { FcmPushSender(it) } ?: LoggingPushSender()
-            val purchaseVerifier = StubPlayPurchaseVerifier(clock, allowTestTokens = config.authMode == AuthMode.DEV)
-            return AppModule(config, database, tokenVerifier, pushSender, purchaseVerifier, clock)
+            return AppModule(config, database, tokenVerifier, pushSender, purchaseVerifier(config, clock), clock, pubSubVerifier(config))
+        }
+
+        /** AUTH_MODE=dev → stub (never talks to Google); otherwise the real Play Developer API verifier. */
+        fun purchaseVerifier(config: AppConfig, clock: Clock): PlayPurchaseVerifier = when (config.authMode) {
+            AuthMode.DEV -> StubPlayPurchaseVerifier(clock, allowTestTokens = true)
+            AuthMode.FIREBASE -> GooglePlayPurchaseVerifier(
+                packageName = config.play.packageName,
+                accessTokens = try {
+                    ServiceAccountAccessTokenProvider.fromFile(config.play.serviceAccountJsonPath)
+                } catch (e: IOException) {
+                    error("Play billing needs a service account (PLAY_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS): ${e.message}")
+                },
+            )
+        }
+
+        fun pubSubVerifier(config: AppConfig): PubSubTokenVerifier {
+            val audience = config.rtdn.audience
+            val email = config.rtdn.pushServiceAccount
+            return if (config.rtdn.enabled && audience != null && email != null) {
+                GooglePubSubTokenVerifier(audience, email)
+            } else {
+                DisabledPubSubTokenVerifier
+            }
         }
     }
 }

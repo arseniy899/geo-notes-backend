@@ -75,8 +75,11 @@ interface EventRepository {
     suspend fun countForShare(shareId: UUID): Int
 }
 
+/** One entitlement row per user. Purchase tokens are looked up by their SHA-256 hash. */
 interface EntitlementRepository {
     suspend fun find(userId: UserId): Entitlement?
-    suspend fun findByPurchaseToken(purchaseToken: String): Entitlement?
+    /** [tokenHash] = [com.geonotes.backend.domain.model.PurchaseTokens.hash] of the raw token. */
+    suspend fun findByTokenHash(tokenHash: String): Entitlement?
+    /** Inserts or replaces the user's entitlement. */
     suspend fun upsert(entitlement: Entitlement): Entitlement
 }

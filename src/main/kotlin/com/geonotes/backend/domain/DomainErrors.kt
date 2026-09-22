@@ -15,3 +15,18 @@ class ConflictException(message: String, code: String = "conflict") : DomainExce
 
 /** A quota/budget limit was hit (e.g. max active shares). */
 class LimitExceededException(message: String, code: String = "limit_exceeded") : DomainException(code, message)
+
+/**
+ * A required upstream (e.g. the Google Play Developer API) is unavailable or misconfigured.
+ * Mapped to 503 with `Retry-After: [retryAfterSeconds]`.
+ */
+class UpstreamUnavailableException(
+    message: String,
+    code: String = "billing_unavailable",
+    val retryAfterSeconds: Long = 30,
+    cause: Throwable? = null,
+) : DomainException(code, message) {
+    init {
+        cause?.let { initCause(it) }
+    }
+}
