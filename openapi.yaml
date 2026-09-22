@@ -29,6 +29,8 @@ tags:
   - name: shares
   - name: events
   - name: entitlements
+  - name: play
+    description: Google Play Real-time Developer Notifications (server-to-server, Pub/Sub push)
 
 paths:
   /health:
@@ -194,20 +196,71 @@ paths:
         "404": { description: "`share_not_found`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { $ref: "#/components/responses/Error" }
 
+  /v1/entitlements:
+    get:
+      tags: [entitlements]
+      summary: The caller's current entitlement
+      description: |
+        Returns the stored entitlement. If a subscription's `expiresAt` has passed and it was not checked with
+        Google Play since then (or the last check is older than 24 h), it is re-verified first (a renewal whose
+        RTDN was missed is picked up). If Play is unreachable, the stored state is returned. `pro` is the only
+        field clients need to gate features.
+      responses:
+        "200": { description: Entitlement (`pro:false, state:null` if none), content: { application/json: { schema: { $ref: "#/components/schemas/Entitlement" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { description: "`user_not_registered`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
   /v1/entitlements/verify:
     post:
       tags: [entitlements]
-      summary: Verify a Google Play purchase and store the caller's entitlement
+      summary: Verify a Google Play purchase and bind it to the caller
       description: |
-        MVP stub — real Google Play Developer API verification is TODO. In `AUTH_MODE=dev`, tokens starting
-        with `test-valid` grant 30 days of Pro. A purchase token can be bound to one account only.
+        Server-side verification with the Google Play Developer API (Android Publisher v3):
+        `pro_monthly` / `pro_yearly` via `purchases.subscriptionsv2.get`, `pro_lifetime` via
+        `purchases.productsv2.getproductpurchasev2`. Paid, unacknowledged purchases are acknowledged server-side.
+        Pro is granted for `ACTIVE`, `IN_GRACE_PERIOD` and `CANCELED` (until `expiresAt`); a lifetime purchase is
+        `ACTIVE` with `expiresAt: null`. An unknown token (Play 400/404/410) yields `pro:false, state:INVALID`.
+
+        Rules: a purchase token can be bound to one account only (409). A still-valid entitlement is never
+        replaced by a non-Pro result, and a valid lifetime purchase is never replaced by a subscription. For an
+        upgrade/downgrade, the previous token (`linkedPurchaseToken`) becomes `REPLACED`.
+
+        In `AUTH_MODE=dev` a stub is used instead of Google: tokens starting with `test-valid` grant Pro.
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/VerifyPurchaseRequest" } } }
       responses:
         "200": { description: Entitlement, content: { application/json: { schema: { $ref: "#/components/schemas/Entitlement" } } } }
         "400": { description: "`unknown_product` | `validation_failed`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "409": { description: "`purchase_token_in_use`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { description: "`purchase_token_in_use` | `user_not_registered`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/BillingUnavailable" }
+
+  /v1/play/rtdn:
+    post:
+      tags: [play]
+      summary: Google Play Real-time Developer Notification (Pub/Sub push endpoint)
+      description: |
+        Called by a Cloud Pub/Sub **push** subscription on the Play RTDN topic, not by the app. Authenticated
+        with the subscription's OIDC token: `Authorization: Bearer <JWT>` signed by Google, `iss`
+        `https://accounts.google.com`, `aud` = `RTDN_AUDIENCE`, `email` = `RTDN_PUSH_SERVICE_ACCOUNT`
+        (`email_verified: true`). Disabled (always 401) until both variables are set.
+
+        `message.data` is a base64 `DeveloperNotification`. Subscription and one-time product notifications
+        re-verify the token with Play and update the bound entitlement; `voidedPurchaseNotification`
+        (refund/chargeback, full refunds only) revokes it; `SUBSCRIPTION_PURCHASED` for an upgrade moves the owner
+        of `linkedPurchaseToken` onto the new token. Test notifications, tokens not bound to any account,
+        foreign packages and undecodable payloads are acknowledged with 200. A 503 (Play unreachable) makes
+        Pub/Sub redeliver.
+      security:
+        - pubsubPush: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PubSubPushRequest" } } }
+      responses:
+        "200": { description: Handled (or authentic but ignored), content: { application/json: { schema: { $ref: "#/components/schemas/RtdnResult" } } } }
+        "401": { description: "`unauthorized`: missing/invalid Pub/Sub OIDC token", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/BillingUnavailable" }
 
 components:
   securitySchemes:
@@ -215,10 +268,22 @@ components:
       type: http
       scheme: bearer
       description: Firebase ID token (prod) or `dev:<uid>` (AUTH_MODE=dev).
+    pubsubPush:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Google-signed OIDC token attached by the Pub/Sub push subscription (RTDN endpoint only).
 
   responses:
     Error:
       description: Error
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    BillingUnavailable:
+      description: |
+        `billing_unavailable`: Google Play API unreachable, timed out, rate limited, or the service account lacks
+        access (401/403 from Google). Retry after `Retry-After` seconds.
+      headers:
+        Retry-After: { schema: { type: integer }, description: Seconds to wait before retrying }
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
 
   schemas:
@@ -349,7 +414,28 @@ components:
         productId: { type: string, enum: [pro_monthly, pro_yearly, pro_lifetime] }
     Entitlement:
       type: object
+      required: [pro, autoRenewing]
       properties:
-        pro: { type: boolean }
-        expiresAt: { type: [string, "null"], format: date-time }
-        productId: { type: [string, "null"] }
+        pro: { type: boolean, description: Whether Pro features are unlocked right now }
+        expiresAt: { type: [string, "null"], format: date-time, description: Subscription expiry; null for lifetime }
+        productId: { type: [string, "null"], enum: [pro_monthly, pro_yearly, pro_lifetime, null] }
+        state:
+          type: [string, "null"]
+          enum: [ACTIVE, IN_GRACE_PERIOD, CANCELED, ON_HOLD, PAUSED, PENDING, EXPIRED, REVOKED, REPLACED, INVALID, null]
+        autoRenewing: { type: boolean }
+        lastVerifiedAt: { type: [string, "null"], format: date-time, description: Last check with Google Play }
+    PubSubPushRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: object
+          properties:
+            data: { type: string, description: "base64 JSON DeveloperNotification", maxLength: 65536 }
+            messageId: { type: string }
+            attributes: { type: object, additionalProperties: { type: string } }
+        subscription: { type: string, example: projects/my-project/subscriptions/play-rtdn-push }
+    RtdnResult:
+      type: object
+      properties:
+        outcome: { type: string, enum: [UPDATED, REVOKED, UNKNOWN_TOKEN, IGNORED] }
