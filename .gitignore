@@ -1,0 +1,24 @@
+# Gradle / Kotlin
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+out/
+
+# OS
+.DS_Store
+
+# Local config & secrets — never commit
+.env
+secrets/
+*.service-account.json
+firebase-*.json
+
+# Logs / dumps
+*.log
+*.dump

@@ -1,0 +1,36 @@
+# TLS termination + reverse proxy for the WhenHere API.
+# Certificates are obtained automatically from Let's Encrypt for {$API_DOMAIN}.
+{
+	email {$ACME_EMAIL}
+}
+
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	# Request bodies are small (encrypted place blobs ≤ 8 KiB).
+	request_body {
+		max_size 64KB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	reverse_proxy app:8080 {
+		health_uri /health
+		health_interval 30s
+	}
+
+	# Access log without Authorization headers (the API uses no query strings; bodies are never logged).
+	log {
+		output stdout
+		format filter {
+			request>headers>Authorization delete
+			request>remote_ip ip_mask 16 32
+			request>client_ip ip_mask 16 32
+		}
+	}
+}

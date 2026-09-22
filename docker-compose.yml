@@ -1,0 +1,82 @@
+# Production-ish stack for a single Hetzner CX23 (2 vCPU / 4 GB):
+#   caddy (TLS, :80/:443)  →  app (Ktor, :8080 internal)  →  db (PostgreSQL 17, internal only)
+# Usage: cp .env.example .env && edit; put the Firebase service account at ./secrets/firebase-service-account.json
+#        docker compose up -d --build
+name: whenhere
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-geonotes}
+      POSTGRES_USER: ${POSTGRES_USER:-geonotes}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    command: ["postgres", "-c", "shared_buffers=256MB", "-c", "max_connections=50"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [backend]
+    mem_limit: 1g
+
+  app:
+    build: .
+    image: whenhere-backend:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: "8080"
+      APP_ENV: production          # refuses AUTH_MODE=dev at startup
+      DATABASE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-geonotes}
+      DATABASE_USER: ${POSTGRES_USER:-geonotes}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      AUTH_MODE: ${AUTH_MODE:-firebase}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-service-account.json
+      RATE_LIMIT_EVENTS_PER_MINUTE: ${RATE_LIMIT_EVENTS_PER_MINUTE:-60}
+      RATE_LIMIT_INVITES_PER_MINUTE: ${RATE_LIMIT_INVITES_PER_MINUTE:-10}
+      JAVA_OPTS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError -Duser.timezone=UTC"
+    volumes:
+      - ./secrets/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    networks: [backend]
+    mem_limit: 1g
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [backend]
+    mem_limit: 256m
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+
+networks:
+  backend:

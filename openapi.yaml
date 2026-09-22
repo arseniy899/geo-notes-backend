@@ -1,0 +1,355 @@
+openapi: 3.1.0
+info:
+  title: WhenHere API
+  version: 0.1.0
+  description: |
+    Backend for the WhenHere Android app (location-triggered reminders).
+    Places and rules live on-device. The server only powers the friend feature
+    ("when a friend enters place X, remind me") and entitlement checks.
+
+    **Privacy model:** the server never receives coordinates. Shared places are E2E-encrypted by
+    the owner's device (`encryptedPlace`) with a random content key, sealed per recipient device
+    (`sealedKey`) using that device's public key. The *owner's* device evaluates the geofence locally
+    and posts only `{shareId, transition, occurredAt}`; the server fans that out as an FCM data message.
+
+    All `/v1` endpoints require `Authorization: Bearer <Firebase ID token>`
+    (or `Bearer dev:<uid>` when the server runs with `AUTH_MODE=dev`).
+    Binary fields are base64. Timestamps are ISO-8601 UTC instants.
+servers:
+  - url: https://api.example.com
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+
+tags:
+  - name: health
+  - name: me
+  - name: devices
+  - name: friends
+  - name: shares
+  - name: events
+  - name: entitlements
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      security: []
+      summary: Liveness + database check
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } } }
+        "503": { description: Database down, content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } } }
+
+  /v1/me:
+    put:
+      tags: [me]
+      summary: Create or update the caller's profile (required before other calls)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UpsertMeRequest" } } }
+      responses:
+        "200": { description: Profile, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [me]
+      summary: Get the caller's profile and entitlement
+      responses:
+        "200": { description: Profile, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "404": { description: "`user_not_registered`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      tags: [me]
+      summary: Delete account and all associated data (Google Play account-deletion requirement)
+      description: Cascades devices, invites, friendships, owned shares, share recipients, events and entitlements.
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/devices:
+    post:
+      tags: [devices]
+      summary: Register or refresh a device (FCM token + public key)
+      description: Re-registering the same `deviceId` updates it; if it belonged to another account it moves to the caller.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RegisterDeviceRequest" } } }
+      responses:
+        "200": { description: Device, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { description: "`user_not_registered`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /v1/devices/{id}:
+    delete:
+      tags: [devices]
+      summary: Unregister one of the caller's devices
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/invites:
+    post:
+      tags: [friends]
+      summary: Create a single-use invite code (48 h TTL) for an invite link / QR code
+      description: Rate limited per user (`RATE_LIMIT_INVITES_PER_MINUTE`, default 10/min).
+      responses:
+        "201": { description: Invite, content: { application/json: { schema: { $ref: "#/components/schemas/Invite" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /v1/invites/{code}/accept:
+    post:
+      tags: [friends]
+      summary: Accept an invite → mutual friendship with the inviter
+      parameters: [{ name: code, in: path, required: true, schema: { type: string, example: "K7QM3XRA" } }]
+      responses:
+        "200": { description: The new friend (the inviter), content: { application/json: { schema: { $ref: "#/components/schemas/Friend" } } } }
+        "400": { description: "`invite_self`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "`invite_not_found`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "`invite_expired` | `invite_used` | `user_not_registered`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /v1/friends:
+    get:
+      tags: [friends]
+      summary: List accepted friends
+      responses:
+        "200": { description: Friends, content: { application/json: { schema: { $ref: "#/components/schemas/Friends" } } } }
+  /v1/friends/{userId}:
+    delete:
+      tags: [friends]
+      summary: Unfriend (either side). Also revokes all shares between the two users.
+      parameters: [{ name: userId, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Removed }
+        "404": { description: "`friend_not_found`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /v1/friends/{userId}/devices:
+    get:
+      tags: [friends]
+      summary: A friend's device public keys (to seal share keys for them)
+      parameters: [{ name: userId, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Keys, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceKeys" } } } }
+        "403": { description: "`not_a_friend`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /v1/shares:
+    post:
+      tags: [shares]
+      summary: Share an encrypted place with friends' devices
+      description: |
+        The caller is the **owner**: their movement triggers the share. Every recipient must be an accepted
+        friend and every `deviceId` must belong to that recipient. At most 20 *active* shares per owner
+        (Android geofence budget).
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateShareRequest" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Share" } } } }
+        "400": { description: "`validation_failed` | `recipient_device_invalid` | `recipient_is_owner`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: "`recipient_not_friend`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "`share_limit_reached`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    get:
+      tags: [shares]
+      summary: Shares owned by the caller and shares received by the caller
+      description: For received shares, `recipients` contains only the caller's own devices' sealed keys.
+      responses:
+        "200": { description: Shares, content: { application/json: { schema: { $ref: "#/components/schemas/Shares" } } } }
+  /v1/shares/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    patch:
+      tags: [shares]
+      summary: Activate/deactivate or pause a share (owner only)
+      description: "Absent fields are unchanged; `\"pausedUntil\": null` clears a pause."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UpdateShareRequest" } } }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/Share" } } } }
+        "403": { description: "`not_share_owner`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "`share_not_found`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "`share_limit_reached` (re-activating while at the limit)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      tags: [shares]
+      summary: Delete a share (owner only)
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/events:
+    post:
+      tags: [events]
+      summary: Report a geofence transition for an owned share
+      description: |
+        Only the share owner may post. Ignored (status `IGNORED`) when the share is inactive, paused,
+        the transition is not subscribed, or `occurredAt` is older than 24 h. Otherwise the event is stored
+        (7-day TTL) and every recipient device receives a high-priority FCM **data** message:
+        `{"type":"friend_transition","shareId":"…","fromUserId":"…","transition":"ENTER","occurredAt":"…"}`.
+        Rate limited per user (`RATE_LIMIT_EVENTS_PER_MINUTE`, default 60/min).
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PostEventRequest" } } }
+      responses:
+        "202": { description: Accepted (delivered or ignored), content: { application/json: { schema: { $ref: "#/components/schemas/EventResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { description: "`not_share_owner`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "`share_not_found`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /v1/entitlements/verify:
+    post:
+      tags: [entitlements]
+      summary: Verify a Google Play purchase and store the caller's entitlement
+      description: |
+        MVP stub — real Google Play Developer API verification is TODO. In `AUTH_MODE=dev`, tokens starting
+        with `test-valid` grant 30 days of Pro. A purchase token can be bound to one account only.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/VerifyPurchaseRequest" } } }
+      responses:
+        "200": { description: Entitlement, content: { application/json: { schema: { $ref: "#/components/schemas/Entitlement" } } } }
+        "400": { description: "`unknown_product` | `validation_failed`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "`purchase_token_in_use`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Firebase ID token (prod) or `dev:<uid>` (AUTH_MODE=dev).
+
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, details]
+          properties:
+            code: { type: string, example: share_limit_reached }
+            message: { type: string }
+            details: { type: array, items: { type: string } }
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        database: { type: string, enum: [up, down] }
+    UpsertMeRequest:
+      type: object
+      required: [displayName]
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 64 }
+    Me:
+      type: object
+      properties:
+        userId: { type: string }
+        displayName: { type: string }
+        createdAt: { type: string, format: date-time }
+        entitlement: { $ref: "#/components/schemas/Entitlement" }
+    RegisterDeviceRequest:
+      type: object
+      required: [deviceId, fcmToken, publicKey, platform]
+      properties:
+        deviceId: { type: string, pattern: "^[A-Za-z0-9_-]{8,64}$" }
+        fcmToken: { type: string, maxLength: 4096 }
+        publicKey: { type: string, format: byte, description: "Base64 device public key (32..512 bytes)" }
+        platform: { type: string, enum: [ANDROID, IOS] }
+    Device:
+      type: object
+      properties:
+        deviceId: { type: string }
+        platform: { type: string }
+        publicKey: { type: string, format: byte }
+        updatedAt: { type: string, format: date-time }
+    DeviceKeys:
+      type: object
+      properties:
+        userId: { type: string }
+        devices: { type: array, items: { $ref: "#/components/schemas/Device" } }
+    Invite:
+      type: object
+      properties:
+        code: { type: string, example: K7QM3XRA }
+        expiresAt: { type: string, format: date-time }
+    Friend:
+      type: object
+      properties:
+        userId: { type: string }
+        displayName: { type: string }
+        since: { type: string, format: date-time }
+    Friends:
+      type: object
+      properties:
+        friends: { type: array, items: { $ref: "#/components/schemas/Friend" } }
+    Transition:
+      type: string
+      enum: [ENTER, EXIT]
+    ShareRecipient:
+      type: object
+      required: [userId, deviceId, sealedKey]
+      properties:
+        userId: { type: string }
+        deviceId: { type: string }
+        sealedKey: { type: string, format: byte, description: Content key sealed to the device public key }
+    CreateShareRequest:
+      type: object
+      required: [encryptedPlace, recipients]
+      properties:
+        encryptedPlace: { type: string, format: byte, description: "Client-side encrypted place (≤ 8 KiB)" }
+        recipients: { type: array, minItems: 1, maxItems: 50, items: { $ref: "#/components/schemas/ShareRecipient" } }
+        transitions: { type: array, minItems: 1, maxItems: 2, items: { $ref: "#/components/schemas/Transition" }, default: [ENTER] }
+    UpdateShareRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        active: { type: boolean }
+        pausedUntil: { type: [string, "null"], format: date-time }
+    Share:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        ownerId: { type: string }
+        ownerDisplayName: { type: [string, "null"], description: Set for received shares }
+        encryptedPlace: { type: string, format: byte }
+        transitions: { type: array, items: { $ref: "#/components/schemas/Transition" } }
+        active: { type: boolean }
+        pausedUntil: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        recipients: { type: array, items: { $ref: "#/components/schemas/ShareRecipient" } }
+    Shares:
+      type: object
+      properties:
+        owned: { type: array, items: { $ref: "#/components/schemas/Share" } }
+        received: { type: array, items: { $ref: "#/components/schemas/Share" } }
+    PostEventRequest:
+      type: object
+      required: [shareId, transition, occurredAt]
+      properties:
+        shareId: { type: string, format: uuid }
+        transition: { $ref: "#/components/schemas/Transition" }
+        occurredAt: { type: string, format: date-time }
+    EventResult:
+      type: object
+      properties:
+        status: { type: string, enum: [DELIVERED, IGNORED] }
+        eventId: { type: [string, "null"], format: uuid }
+        reason: { type: [string, "null"], enum: [inactive, paused, transition_not_subscribed, stale, null] }
+        recipientDevices: { type: integer }
+        pushed: { type: integer }
+    VerifyPurchaseRequest:
+      type: object
+      required: [purchaseToken, productId]
+      properties:
+        purchaseToken: { type: string }
+        productId: { type: string, enum: [pro_monthly, pro_yearly, pro_lifetime] }
+    Entitlement:
+      type: object
+      properties:
+        pro: { type: boolean }
+        expiresAt: { type: [string, "null"], format: date-time }
+        productId: { type: [string, "null"] }

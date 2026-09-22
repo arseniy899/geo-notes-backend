@@ -1,0 +1,10 @@
+.git
+.gradle
+build
+**/build
+.idea
+*.iml
+.env
+secrets
+deploy
+.github
