@@ -5,6 +5,7 @@ import com.geonotes.backend.api.model.UpsertMeRequest
 import com.geonotes.backend.domain.service.DeviceService
 import com.geonotes.backend.domain.service.EventService
 import com.geonotes.backend.domain.service.FriendService
+import com.geonotes.backend.domain.service.ShareRequestService
 import com.geonotes.backend.domain.service.ShareService
 import com.geonotes.backend.domain.service.UserService
 import com.geonotes.backend.support.DirectTransactionRunner
@@ -15,6 +16,7 @@ import com.geonotes.backend.support.InMemoryEventRepository
 import com.geonotes.backend.support.InMemoryFriendshipRepository
 import com.geonotes.backend.support.InMemoryInviteRepository
 import com.geonotes.backend.support.InMemoryShareRepository
+import com.geonotes.backend.support.InMemoryShareRequestRepository
 import com.geonotes.backend.support.InMemoryUserRepository
 import com.geonotes.backend.support.MutableClock
 import java.util.Base64
@@ -28,21 +30,24 @@ class ControllerFixture(maxActiveShares: Int = 20) {
     val invites = InMemoryInviteRepository()
     val friendships = InMemoryFriendshipRepository(users)
     val shares = InMemoryShareRepository(users)
+    val shareRequests = InMemoryShareRequestRepository(users)
     val events = InMemoryEventRepository()
     val entitlements = InMemoryEntitlementRepository()
 
     private val tx = DirectTransactionRunner
     val userService = UserService(users, entitlements, clock)
     val deviceService = DeviceService(devices, userService, clock)
-    val friendService = FriendService(users, userService, invites, friendships, shares, devices, tx, clock)
+    val friendService = FriendService(users, userService, invites, friendships, shares, shareRequests, devices, tx, clock)
     val shareService = ShareService(shares, devices, friendService, userService, tx, clock, maxActiveSharesPerOwner = maxActiveShares)
     val eventService = EventService(shareService, events, devices, invites, push, clock)
+    val shareRequestService = ShareRequestService(shareRequests, devices, friendService, shareService, userService, push, tx, clock)
 
     val me = MeController(userService, clock)
     val devicesController = DevicesController(deviceService)
     val friendsController = FriendsController(friendService)
     val sharesController = SharesController(shareService)
     val eventsController = EventsController(eventService)
+    val shareRequestsController = ShareRequestsController(shareRequestService)
 
     suspend fun user(id: String, deviceId: String = "$id-device-1") {
         me.upsert(id, UpsertMeRequest(displayName = id.replaceFirstChar { it.uppercase() }))

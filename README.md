@@ -45,7 +45,31 @@ The server **never receives coordinates**.
 * FCM messages are **data-only** (no notification payload). The receiving app renders the reminder after
   decrypting the share locally.
 * Logs contain method, path, status and request id. They never contain bodies, bearer tokens or FCM tokens.
-* Unfriending revokes all shares between the two users. `DELETE /v1/me` cascades **everything**.
+* Unfriending revokes all shares and pending share requests between the two users. `DELETE /v1/me` cascades **everything**.
+
+### Share requests (the watcher starts the flow)
+
+"When any friend arrives at the mall, remind me about the gift" is set up by the **watcher** (Alice), but the
+geofence must run on the **mover's** (Bob's) phone. So Alice's device encrypts the place and asks Bob:
+
+```
+ Alice (watcher)                                  Server                          Bob (mover, future owner)
+ K = random content key; encryptedPlace = AEAD(K, place)
+ ownerKeys     = seal(K, pub of each Bob device)
+ recipientKeys = seal(K, pub of each Alice device)
+ POST /v1/share-requests ───────────────────────▶ PENDING (7 days) ──FCM──▶ {type: share_request}
+                                                                             Bob sees "Alice wants to know when you
+                                                                             arrive at <place>" (decrypted locally)
+                                                  ◀── POST /v1/share-requests/{id}/accept (explicit consent)
+                                                  creates Share(owner = Bob, recipients = Alice's devices,
+                                                  ownerKeys = Bob's devices)
+ {type: share_request_accepted, shareId} ◀──FCM──
+                                                                             Bob's phone registers the geofence and
+                                                                             later POSTs /v1/events as above
+```
+
+The server still sees only ciphertext, sealed keys and ids. `note` is an optional short plaintext message for
+Bob; the app does not send one by default and must never put place data in it.
 
 ---
 
@@ -89,7 +113,7 @@ src/main/kotlin/com/geonotes/backend/
 ├── plugins/              Ktor plugins
 ├── push/                 PushSender, FcmPushSender, LoggingPushSender
 └── routes/               Views
-src/main/resources/db/migration/V1__init.sql
+src/main/resources/db/migration/V1__init.sql, V2__share_requests.sql
 ```
 
 ---
@@ -116,6 +140,11 @@ All `/v1` endpoints require `Authorization: Bearer <Firebase ID token>`. In `AUT
 | GET | `/v1/shares` | `{owned, received}`. Received shares include only the caller's sealed keys |
 | PATCH | `/v1/shares/{id}` | `{active?, pausedUntil?}` (`pausedUntil: null` clears) |
 | DELETE | `/v1/shares/{id}` | Delete own share |
+| POST | `/v1/share-requests` | Watcher asks a friend to share `{toUserId, encryptedPlace, ownerKeys, recipientKeys, transitions, note?}` (rate limited) |
+| GET | `/v1/share-requests` | `{incoming, outgoing}` requests that have not expired |
+| POST | `/v1/share-requests/{id}/accept` | Target accepts → active share owned by the caller (counts toward the 20-share limit) |
+| POST | `/v1/share-requests/{id}/decline` | Target declines |
+| DELETE | `/v1/share-requests/{id}` | Requester cancels |
 | POST | `/v1/events` | Owner reports `{shareId, transition, occurredAt}` → FCM fan-out (rate limited) |
 | POST | `/v1/entitlements/verify` | `{purchaseToken, productId}` → `{pro, expiresAt}` (Play verification stubbed) |
 
@@ -124,6 +153,11 @@ All `/v1` endpoints require `Authorization: Bearer <Firebase ID token>`. In `AUT
 * Share recipients must be **accepted friends**, and each `deviceId` must belong to that friend.
 * **Max 20 active shares per owner**, because Android geofence budget is 100 per app and the rest is kept
   for local places. Deactivating a share frees a slot.
+* Share requests: requester and target must be accepted friends; `ownerKeys` devices must belong to the target
+  and `recipientKeys` devices to the requester. Requests expire after **7 days** (purged hourly), at most 50
+  pending per requester. Only the target can accept or decline; only the requester can cancel. Accepting
+  reuses the sealed keys, so the server never needs to touch key material. Pushes: `share_request` to the
+  target, `share_request_accepted` to the requester (declines are silent).
 * Events are accepted only from the share owner. They are **ignored** (202, `status: IGNORED`) if the share
   is inactive or paused, the transition is not subscribed, or `occurredAt` is more than 24 h old. Stored
   events expire after **7 days** (hourly cleanup coroutine, which also purges expired invites).
@@ -138,12 +172,12 @@ All `/v1` endpoints require `Authorization: Bearer <Firebase ID token>`. In `AUT
 
 | Status | Codes |
 |---|---|
-| 400 | `validation_failed`, `bad_request`, `invite_self`, `recipient_device_invalid`, `recipient_is_owner`, `unknown_product` |
+| 400 | `validation_failed`, `bad_request`, `invite_self`, `recipient_device_invalid`, `recipient_is_owner`, `owner_device_invalid`, `share_request_self`, `share_request_device_invalid`, `unknown_product` |
 | 401 | `unauthorized` |
-| 403 | `not_a_friend`, `recipient_not_friend`, `not_share_owner` |
-| 404 | `not_found`, `user_not_registered` (GET/DELETE me), `invite_not_found`, `friend_not_found`, `share_not_found`, `device_not_found` |
-| 409 | `user_not_registered` (other endpoints), `invite_expired`, `invite_used`, `purchase_token_in_use` |
-| 422 | `share_limit_reached` |
+| 403 | `not_a_friend`, `recipient_not_friend`, `not_share_owner`, `not_share_request_target`, `not_share_requester` |
+| 404 | `not_found`, `user_not_registered` (GET/DELETE me), `invite_not_found`, `friend_not_found`, `share_not_found`, `device_not_found`, `share_request_not_found` |
+| 409 | `user_not_registered` (other endpoints), `invite_expired`, `invite_used`, `purchase_token_in_use`, `share_request_not_pending`, `share_request_expired`, `recipient_device_invalid` (accept) |
+| 422 | `share_limit_reached`, `share_request_limit_reached` |
 | 429 | `rate_limited` |
 
 ---
@@ -188,6 +222,7 @@ The full stack (Caddy + app + Postgres) runs with `docker compose up -d --build`
 | `GOOGLE_APPLICATION_CREDENTIALS` | *(ADC)* | Firebase service-account JSON path. Used for token verification and FCM. Without it, FCM is disabled (pushes are logged) and `firebase` auth mode refuses to start |
 | `RATE_LIMIT_EVENTS_PER_MINUTE` | `60` | Per-user limit on `POST /v1/events` |
 | `RATE_LIMIT_INVITES_PER_MINUTE` | `10` | Per-user limit on invite create/accept |
+| `RATE_LIMIT_SHARE_REQUESTS_PER_MINUTE` | `20` | Per-user limit on `POST /v1/share-requests` |
 
 ---
 
@@ -201,7 +236,8 @@ The full stack (Caddy + app + Postgres) runs with `docker compose up -d --build`
   over in-memory fake repositories and a `FakePushSender`. They need no DB and no Ktor.
 * **Integration tests** (`integration/*IntegrationTest`) use Ktor `testApplication` against a **real
   PostgreSQL 17** with the Flyway migrations. They cover invites/friends, shares (friend-only recipients,
-  20-share limit), event fan-out (asserting pushes), account-deletion cascade, auth rejection and rate limits.
+  20-share limit), share requests (request → accept → event relay, authorization, expiry, cascade), event
+  fan-out (asserting pushes), account-deletion cascade, auth rejection and rate limits.
 * The database comes from **Testcontainers** (`postgres:17-alpine`, needs Docker). To use an existing
   server instead, set `TEST_DATABASE_URL` (+ `TEST_DATABASE_USER`, `TEST_DATABASE_PASSWORD`). Tests
   truncate all tables, so use a disposable database.

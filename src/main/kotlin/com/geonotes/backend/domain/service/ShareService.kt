@@ -32,6 +32,8 @@ class ShareService(
         val encryptedPlace: ByteArray,
         val recipients: List<ShareRecipient>,
         val transitions: Set<Transition>,
+        /** Content key sealed to the owner's own devices (see [Share.ownerKeys]). */
+        val ownerKeys: List<ShareRecipient> = emptyList(),
     )
 
     data class Shares(val owned: List<Share>, val received: List<ReceivedShare>)
@@ -54,6 +56,7 @@ class ShareService(
                 createdAt = now,
                 updatedAt = now,
                 recipients = request.recipients,
+                ownerKeys = request.ownerKeys,
             ),
         )
     }
@@ -111,6 +114,22 @@ class ShareService(
             val device = knownDevices[r.deviceId]
             if (device == null || device.userId != r.userId) {
                 throw ValidationException("Device ${r.deviceId} does not belong to ${r.userId}", "recipient_device_invalid")
+            }
+        }
+        validateOwnerKeys(ownerId, request.ownerKeys)
+    }
+
+    private suspend fun validateOwnerKeys(ownerId: UserId, ownerKeys: List<ShareRecipient>) {
+        if (ownerKeys.isEmpty()) return
+        if (ownerKeys.size > maxRecipients) throw ValidationException("At most $maxRecipients owner devices")
+        if (ownerKeys.map { it.deviceId }.toSet().size != ownerKeys.size) throw ValidationException("Duplicate owner deviceId")
+        if (ownerKeys.any { it.sealedKey.isEmpty() || it.sealedKey.size > 1024 }) {
+            throw ValidationException("sealedKey must be 1..1024 bytes")
+        }
+        val known = devices.findByIds(ownerKeys.map { it.deviceId }).associateBy { it.id }
+        for (k in ownerKeys) {
+            if (k.userId != ownerId || known[k.deviceId]?.userId != ownerId) {
+                throw ValidationException("Device ${k.deviceId} does not belong to the owner", "owner_device_invalid")
             }
         }
     }

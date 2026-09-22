@@ -13,6 +13,7 @@ import com.geonotes.backend.domain.repository.DeviceRepository
 import com.geonotes.backend.domain.repository.FriendshipRepository
 import com.geonotes.backend.domain.repository.InviteRepository
 import com.geonotes.backend.domain.repository.ShareRepository
+import com.geonotes.backend.domain.repository.ShareRequestRepository
 import com.geonotes.backend.domain.repository.TransactionRunner
 import com.geonotes.backend.domain.repository.UserRepository
 import java.security.SecureRandom
@@ -39,6 +40,7 @@ class FriendService(
     private val invites: InviteRepository,
     private val friendships: FriendshipRepository,
     private val shares: ShareRepository,
+    private val shareRequests: ShareRequestRepository,
     private val devices: DeviceRepository,
     private val tx: TransactionRunner,
     private val clock: Clock,
@@ -70,10 +72,11 @@ class FriendService(
 
     suspend fun listFriends(userId: UserId): List<Friend> = friendships.listFriends(userId)
 
-    /** Either side can unfriend. Also revokes every share between the two users. */
+    /** Either side can unfriend. Also revokes every share and pending share request between the two users. */
     suspend fun unfriend(userId: UserId, friendId: UserId) = tx.inTransaction {
         if (userId == friendId) throw ValidationException("Cannot unfriend yourself")
         if (!friendships.delete(FriendPair.of(userId, friendId))) throw NotFoundException("Not friends", "friend_not_found")
+        shareRequests.deletePendingBetween(userId, friendId)
         shares.removeRecipientsBetween(userId, friendId)
     }
 

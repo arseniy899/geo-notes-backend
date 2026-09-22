@@ -16,6 +16,8 @@ data class RateLimitConfig(
     val eventsPerMinute: Int = 60,
     /** Invite create/accept per user. */
     val invitesPerMinute: Int = 10,
+    /** POST /v1/share-requests per user. */
+    val shareRequestsPerMinute: Int = 20,
 )
 
 data class AppConfig(
@@ -28,6 +30,7 @@ data class AppConfig(
     val maxActiveSharesPerOwner: Int = 20,
     val inviteTtl: Duration = Duration.ofHours(48),
     val eventTtl: Duration = Duration.ofDays(7),
+    val shareRequestTtl: Duration = Duration.ofDays(7),
     /** Null disables the background cleanup job (tests). */
     val cleanupInterval: Duration? = Duration.ofHours(1),
 ) {
@@ -57,6 +60,7 @@ data class AppConfig(
                 rateLimits = RateLimitConfig(
                     eventsPerMinute = opt("RATE_LIMIT_EVENTS_PER_MINUTE")?.toInt() ?: 60,
                     invitesPerMinute = opt("RATE_LIMIT_INVITES_PER_MINUTE")?.toInt() ?: 10,
+                    shareRequestsPerMinute = opt("RATE_LIMIT_SHARE_REQUESTS_PER_MINUTE")?.toInt() ?: 20,
                 ),
             )
         }

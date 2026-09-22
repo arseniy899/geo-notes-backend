@@ -12,11 +12,13 @@ import com.geonotes.backend.controllers.EntitlementsController
 import com.geonotes.backend.controllers.EventsController
 import com.geonotes.backend.controllers.FriendsController
 import com.geonotes.backend.controllers.MeController
+import com.geonotes.backend.controllers.ShareRequestsController
 import com.geonotes.backend.controllers.SharesController
 import com.geonotes.backend.domain.service.DeviceService
 import com.geonotes.backend.domain.service.EntitlementService
 import com.geonotes.backend.domain.service.EventService
 import com.geonotes.backend.domain.service.FriendService
+import com.geonotes.backend.domain.service.ShareRequestService
 import com.geonotes.backend.domain.service.ShareService
 import com.geonotes.backend.domain.service.UserService
 import com.geonotes.backend.persistence.DatabaseHealth
@@ -26,6 +28,7 @@ import com.geonotes.backend.persistence.ExposedEventRepository
 import com.geonotes.backend.persistence.ExposedFriendshipRepository
 import com.geonotes.backend.persistence.ExposedInviteRepository
 import com.geonotes.backend.persistence.ExposedShareRepository
+import com.geonotes.backend.persistence.ExposedShareRequestRepository
 import com.geonotes.backend.persistence.ExposedTransactionRunner
 import com.geonotes.backend.persistence.ExposedUserRepository
 import com.geonotes.backend.push.FcmPushSender
@@ -56,6 +59,7 @@ class AppModule(
     private val inviteRepository = ExposedInviteRepository(database)
     private val friendshipRepository = ExposedFriendshipRepository(database)
     private val shareRepository = ExposedShareRepository(database)
+    private val shareRequestRepository = ExposedShareRequestRepository(database)
     private val eventRepository = ExposedEventRepository(database)
     private val entitlementRepository = ExposedEntitlementRepository(database)
     val databaseHealth = DatabaseHealth(database)
@@ -69,6 +73,7 @@ class AppModule(
         invites = inviteRepository,
         friendships = friendshipRepository,
         shares = shareRepository,
+        shareRequests = shareRequestRepository,
         devices = deviceRepository,
         tx = tx,
         clock = clock,
@@ -83,6 +88,17 @@ class AppModule(
         clock = clock,
         maxActiveSharesPerOwner = config.maxActiveSharesPerOwner,
     )
+    val shareRequestService = ShareRequestService(
+        requests = shareRequestRepository,
+        devices = deviceRepository,
+        friendService = friendService,
+        shareService = shareService,
+        userService = userService,
+        pushSender = pushSender,
+        tx = tx,
+        clock = clock,
+        ttl = config.shareRequestTtl,
+    )
     val eventService = EventService(shareService, eventRepository, deviceRepository, inviteRepository, pushSender, clock, config.eventTtl)
     val entitlementService = EntitlementService(purchaseVerifier, entitlementRepository, userService, clock)
 
@@ -91,6 +107,7 @@ class AppModule(
     val devicesController = DevicesController(deviceService)
     val friendsController = FriendsController(friendService)
     val sharesController = SharesController(shareService)
+    val shareRequestsController = ShareRequestsController(shareRequestService)
     val eventsController = EventsController(eventService)
     val entitlementsController = EntitlementsController(entitlementService, clock)
 

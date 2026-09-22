@@ -67,6 +67,11 @@ data class ShareResponse(
     val updatedAt: String,
     /** Owner view: all recipient devices. Recipient view: only the caller's own devices' sealed keys. */
     val recipients: List<ShareRecipientResponse>,
+    /**
+     * Owner view only: content key sealed to the owner's own devices (shares created by accepting a share
+     * request, where the requester encrypted the place). Always empty in the recipient view.
+     */
+    val ownerKeys: List<DeviceSealedKey> = emptyList(),
 )
 
 @Serializable

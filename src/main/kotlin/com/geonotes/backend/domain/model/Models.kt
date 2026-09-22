@@ -89,13 +89,20 @@ data class Share(
     val createdAt: Instant,
     val updatedAt: Instant,
     val recipients: List<ShareRecipient>,
+    /**
+     * Content key sealed to the owner's own devices (userId = owner). Present for shares created by
+     * accepting a [ShareRequest]: the requester encrypted the place, so the owner needs a key to decrypt
+     * and geofence it. Empty for shares the owner encrypted themselves. Only exposed to the owner.
+     */
+    val ownerKeys: List<ShareRecipient> = emptyList(),
 ) {
     fun isPausedAt(now: Instant): Boolean = pausedUntil != null && pausedUntil.isAfter(now)
 
     override fun equals(other: Any?): Boolean =
         other is Share && id == other.id && ownerId == other.ownerId &&
             encryptedPlace.contentEquals(other.encryptedPlace) && transitions == other.transitions &&
-            active == other.active && pausedUntil == other.pausedUntil && recipients == other.recipients
+            active == other.active && pausedUntil == other.pausedUntil && recipients == other.recipients &&
+            ownerKeys == other.ownerKeys
 
     override fun hashCode(): Int = id.hashCode()
 }
@@ -104,6 +111,47 @@ data class Share(
 data class ReceivedShare(
     val share: Share,
     val ownerDisplayName: String,
+)
+
+enum class ShareRequestStatus { PENDING, ACCEPTED, DECLINED }
+
+/**
+ * A watcher ([requesterId]) asks a friend ([targetId]) to share their arrivals at a place. The place is
+ * encrypted by the requester; [ownerKeys] seal the content key to the target's devices (so they can decrypt
+ * and geofence it after accepting) and [recipientKeys] to the requester's own devices. Accepting turns it
+ * into an active [Share] owned by the target.
+ */
+data class ShareRequest(
+    val id: UUID,
+    val requesterId: UserId,
+    val targetId: UserId,
+    val encryptedPlace: ByteArray,
+    val transitions: Set<Transition>,
+    val note: String?,
+    val status: ShareRequestStatus,
+    val shareId: UUID?,
+    val createdAt: Instant,
+    val updatedAt: Instant,
+    val expiresAt: Instant,
+    val ownerKeys: List<ShareRecipient>,
+    val recipientKeys: List<ShareRecipient>,
+) {
+    fun isExpiredAt(now: Instant): Boolean = !expiresAt.isAfter(now)
+
+    override fun equals(other: Any?): Boolean =
+        other is ShareRequest && id == other.id && requesterId == other.requesterId && targetId == other.targetId &&
+            encryptedPlace.contentEquals(other.encryptedPlace) && transitions == other.transitions && note == other.note &&
+            status == other.status && shareId == other.shareId && ownerKeys == other.ownerKeys &&
+            recipientKeys == other.recipientKeys
+
+    override fun hashCode(): Int = id.hashCode()
+}
+
+/** A share request with both parties' display names, for listing. */
+data class ShareRequestView(
+    val request: ShareRequest,
+    val requesterDisplayName: String,
+    val targetDisplayName: String,
 )
 
 data class FriendEvent(

@@ -39,18 +39,27 @@ class ExposedShareRepository(database: Database) : ExposedRepository(database), 
             this[ShareRecipientsTable.userId] = r.userId
             this[ShareRecipientsTable.sealedKey] = r.sealedKey
         }
+        if (share.ownerKeys.isNotEmpty()) {
+            ShareOwnerKeysTable.batchInsert(share.ownerKeys) { k ->
+                this[ShareOwnerKeysTable.shareId] = share.id
+                this[ShareOwnerKeysTable.deviceId] = k.deviceId
+                this[ShareOwnerKeysTable.sealedKey] = k.sealedKey
+            }
+        }
         share
     }
 
     override suspend fun find(id: UUID): Share? = dbQuery {
         val row = SharesTable.selectAll().where { SharesTable.id eq id }.singleOrNull() ?: return@dbQuery null
-        row.toShare(recipientsFor(listOf(id))[id].orEmpty())
+        row.toShare(recipientsFor(listOf(id))[id].orEmpty(), ownerKeysFor(listOf(id))[id].orEmpty())
     }
 
     override suspend fun listOwned(ownerId: UserId): List<Share> = dbQuery {
         val rows = SharesTable.selectAll().where { SharesTable.ownerId eq ownerId }.orderBy(SharesTable.createdAt).toList()
-        val recipients = recipientsFor(rows.map { it[SharesTable.id] })
-        rows.map { it.toShare(recipients[it[SharesTable.id]].orEmpty()) }
+        val ids = rows.map { it[SharesTable.id] }
+        val recipients = recipientsFor(ids)
+        val ownerKeys = ownerKeysFor(ids)
+        rows.map { it.toShare(recipients[it[SharesTable.id]].orEmpty(), ownerKeys[it[SharesTable.id]].orEmpty()) }
     }
 
     override suspend fun listReceived(userId: UserId): List<ReceivedShare> = dbQuery {
@@ -76,7 +85,7 @@ class ExposedShareRepository(database: Database) : ExposedRepository(database), 
         }
         if (updated == 0) return@dbQuery null
         val row = SharesTable.selectAll().where { SharesTable.id eq id }.single()
-        row.toShare(recipientsFor(listOf(id))[id].orEmpty())
+        row.toShare(recipientsFor(listOf(id))[id].orEmpty(), ownerKeysFor(listOf(id))[id].orEmpty())
     }
 
     override suspend fun delete(id: UUID): Boolean = dbQuery {
@@ -102,13 +111,23 @@ class ExposedShareRepository(database: Database) : ExposedRepository(database), 
             .orderBy(ShareRecipientsTable.userId to org.jetbrains.exposed.v1.core.SortOrder.ASC, ShareRecipientsTable.deviceId to org.jetbrains.exposed.v1.core.SortOrder.ASC)
             .groupBy({ it[ShareRecipientsTable.shareId] }, { it.toRecipient() })
 
+    private fun ownerKeysFor(shareIds: List<UUID>): Map<UUID, List<ShareRecipient>> =
+        if (shareIds.isEmpty()) emptyMap() else (ShareOwnerKeysTable innerJoin SharesTable)
+            .selectAll()
+            .where { ShareOwnerKeysTable.shareId inList shareIds }
+            .orderBy(ShareOwnerKeysTable.deviceId to org.jetbrains.exposed.v1.core.SortOrder.ASC)
+            .groupBy(
+                { it[ShareOwnerKeysTable.shareId] },
+                { ShareRecipient(userId = it[SharesTable.ownerId], deviceId = it[ShareOwnerKeysTable.deviceId], sealedKey = it[ShareOwnerKeysTable.sealedKey]) },
+            )
+
     private fun ResultRow.toRecipient() = ShareRecipient(
         userId = this[ShareRecipientsTable.userId],
         deviceId = this[ShareRecipientsTable.deviceId],
         sealedKey = this[ShareRecipientsTable.sealedKey],
     )
 
-    private fun ResultRow.toShare(recipients: List<ShareRecipient>) = Share(
+    private fun ResultRow.toShare(recipients: List<ShareRecipient>, ownerKeys: List<ShareRecipient> = emptyList()) = Share(
         id = this[SharesTable.id],
         ownerId = this[SharesTable.ownerId],
         encryptedPlace = this[SharesTable.encryptedPlace],
@@ -118,6 +137,7 @@ class ExposedShareRepository(database: Database) : ExposedRepository(database), 
         createdAt = this[SharesTable.createdAt].toInstant(),
         updatedAt = this[SharesTable.updatedAt].toInstant(),
         recipients = recipients,
+        ownerKeys = ownerKeys,
     )
 
     private fun Set<Transition>.encode(): String = map { it.name }.sorted().joinToString(",")
