@@ -48,6 +48,10 @@ cp .env.example .env && chmod 600 .env
 mkdir -p secrets && chmod 700 secrets
 #   copy the Firebase service-account JSON (Firebase console → Project settings → Service accounts)
 #   to secrets/firebase-service-account.json and chmod 600 it. The app uses it to verify ID tokens and send FCM.
+#   copy the Play billing service-account JSON to secrets/play-service-account.json (chmod 600) and set
+#   RTDN_AUDIENCE / RTDN_PUSH_SERVICE_ACCOUNT in .env (see README → "Google Play billing setup").
+#   Reusing the Firebase account for Play? Copy it to secrets/play-service-account.json as well: the file must
+#   exist, otherwise Docker creates an empty directory at that path and startup fails.
 docker compose up -d --build
 docker compose ps           # all three healthy
 curl https://$API_DOMAIN/health

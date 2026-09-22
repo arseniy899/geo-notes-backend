@@ -1,0 +1,14 @@
+{
+  "kind": "androidpublisher#subscriptionPurchaseV2",
+  "startTime": "2026-03-01T10:00:00Z",
+  "subscriptionState": "SUBSCRIPTION_STATE_EXPIRED",
+  "acknowledgementState": "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+  "canceledStateContext": { "systemInitiatedCancellation": {} },
+  "lineItems": [
+    {
+      "productId": "pro_monthly",
+      "expiryTime": "2026-05-01T10:00:00Z",
+      "autoRenewingPlan": { "autoRenewEnabled": false }
+    }
+  ]
+}

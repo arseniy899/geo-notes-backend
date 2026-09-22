@@ -1,0 +1,14 @@
+{
+  "kind": "androidpublisher#subscriptionPurchaseV2",
+  "startTime": "2026-01-01T10:00:00Z",
+  "subscriptionState": "SUBSCRIPTION_STATE_ON_HOLD",
+  "acknowledgementState": "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+  "onHoldStateContext": { "renewalDeclined": { "pendingOrderId": "GPA.1111-2222-3333-44444..5" } },
+  "lineItems": [
+    {
+      "productId": "pro_monthly",
+      "expiryTime": "2026-05-25T10:00:00Z",
+      "autoRenewingPlan": { "autoRenewEnabled": true }
+    }
+  ]
+}

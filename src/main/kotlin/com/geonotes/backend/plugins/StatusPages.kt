@@ -7,7 +7,9 @@ import com.geonotes.backend.domain.DomainException
 import com.geonotes.backend.domain.ForbiddenException
 import com.geonotes.backend.domain.LimitExceededException
 import com.geonotes.backend.domain.NotFoundException
+import com.geonotes.backend.domain.UpstreamUnavailableException
 import com.geonotes.backend.domain.ValidationException
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
@@ -16,6 +18,7 @@ import io.ktor.server.application.log
 import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.requestvalidation.RequestValidationException
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 
 suspend fun ApplicationCall.respondError(status: HttpStatusCode, code: String, message: String, details: List<String> = emptyList()) =
@@ -23,6 +26,10 @@ suspend fun ApplicationCall.respondError(status: HttpStatusCode, code: String, m
 
 fun Application.configureStatusPages() {
     install(StatusPages) {
+        exception<UpstreamUnavailableException> { call, e ->
+            call.response.header(HttpHeaders.RetryAfter, e.retryAfterSeconds.toString())
+            call.respondError(HttpStatusCode.ServiceUnavailable, e.code, e.message ?: e.code)
+        }
         exception<DomainException> { call, e ->
             val status = when (e) {
                 is ValidationException -> HttpStatusCode.BadRequest
@@ -30,6 +37,7 @@ fun Application.configureStatusPages() {
                 is ForbiddenException -> HttpStatusCode.Forbidden
                 is ConflictException -> HttpStatusCode.Conflict
                 is LimitExceededException -> HttpStatusCode.UnprocessableEntity
+                is UpstreamUnavailableException -> HttpStatusCode.ServiceUnavailable
             }
             call.respondError(status, e.code, e.message ?: e.code)
         }

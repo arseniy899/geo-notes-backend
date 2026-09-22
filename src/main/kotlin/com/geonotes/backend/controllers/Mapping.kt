@@ -54,6 +54,9 @@ internal fun Entitlement?.toResponse(now: Instant) = EntitlementResponse(
     pro = this?.isProAt(now) ?: false,
     expiresAt = this?.expiresAt?.toString(),
     productId = this?.productId,
+    state = this?.state?.name,
+    autoRenewing = this?.autoRenewing ?: false,
+    lastVerifiedAt = this?.lastVerifiedAt?.toString(),
 )
 
 internal fun Share.toResponse(ownerDisplayName: String? = null) = ShareResponse(

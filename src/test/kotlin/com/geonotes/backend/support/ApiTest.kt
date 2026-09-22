@@ -4,11 +4,15 @@ import com.geonotes.backend.AppModule
 import com.geonotes.backend.api.model.CreateShareRequest
 import com.geonotes.backend.api.model.FriendResponse
 import com.geonotes.backend.api.model.InviteResponse
+import com.geonotes.backend.api.model.PubSubMessage
+import com.geonotes.backend.api.model.PubSubPushRequest
 import com.geonotes.backend.api.model.RegisterDeviceRequest
 import com.geonotes.backend.api.model.ShareRecipientRequest
 import com.geonotes.backend.api.model.ShareResponse
 import com.geonotes.backend.api.model.UpsertMeRequest
 import com.geonotes.backend.auth.DevTokenVerifier
+import com.geonotes.backend.auth.PubSubTokenVerifier
+import com.geonotes.backend.billing.PlayPurchaseVerifier
 import com.geonotes.backend.billing.StubPlayPurchaseVerifier
 import com.geonotes.backend.config.AppConfig
 import com.geonotes.backend.config.AuthMode
@@ -48,6 +52,8 @@ abstract class IntegrationTest {
     protected fun apiTest(
         rateLimits: RateLimitConfig = RateLimitConfig(eventsPerMinute = 10_000, invitesPerMinute = 10_000),
         maxActiveShares: Int = 20,
+        purchaseVerifier: PlayPurchaseVerifier? = null,
+        pubSubVerifier: PubSubTokenVerifier = FakePubSubTokenVerifier(),
         block: suspend Api.() -> Unit,
     ) = testApplication {
         val clock = MutableClock()
@@ -59,7 +65,8 @@ abstract class IntegrationTest {
             maxActiveSharesPerOwner = maxActiveShares,
             cleanupInterval = null,
         )
-        val appModule = AppModule(config, TestDatabase.database, DevTokenVerifier(), push, StubPlayPurchaseVerifier(clock, true), clock)
+        val verifier = purchaseVerifier ?: StubPlayPurchaseVerifier(clock, true)
+        val appModule = AppModule(config, TestDatabase.database, DevTokenVerifier(), push, verifier, clock, pubSubVerifier)
         application { module(appModule) }
         val client = createClient { install(ContentNegotiation) { json(ApiJson) } }
         Api(client, push, clock, appModule).block()
@@ -82,6 +89,18 @@ class Api(val client: HttpClient, val push: FakePushSender, val clock: MutableCl
 
     suspend fun patch(path: String, uid: String, body: JsonObject): HttpResponse = client.patch(path) {
         bearerAuth("dev:$uid"); contentType(ContentType.Application.Json); setBody(body)
+    }
+
+    /** POSTs a Pub/Sub push envelope carrying [notificationJson] (base64 in message.data) to the RTDN endpoint. */
+    suspend fun rtdn(notificationJson: String, bearer: String? = FakePubSubTokenVerifier.VALID): HttpResponse = client.post("/v1/play/rtdn") {
+        bearer?.let { bearerAuth(it) }
+        contentType(ContentType.Application.Json)
+        setBody(
+            PubSubPushRequest(
+                message = PubSubMessage(data = b64(notificationJson.toByteArray()), messageId = "136969346945"),
+                subscription = "projects/whenhere/subscriptions/play-rtdn-push",
+            ),
+        )
     }
 
     /** Registers a profile and one device (`<uid>-device-1`, FCM token `fcm-<uid>-device-1`). */

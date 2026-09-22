@@ -5,7 +5,7 @@ import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.java.javaUUID
 import org.jetbrains.exposed.v1.javatime.timestampWithTimeZone
 
-/** Exposed mappings of the Flyway-managed schema (see db/migration/V1__init.sql). Schema is never auto-created. */
+/** Exposed mappings of the Flyway-managed schema (see db/migration/). Schema is never auto-created. */
 object UsersTable : Table("users") {
     val id = varchar("id", 128)
     val displayName = varchar("display_name", 64)
@@ -77,8 +77,12 @@ object EntitlementsTable : Table("entitlements") {
     val userId = reference("user_id", UsersTable.id, onDelete = ReferenceOption.CASCADE)
     val productId = varchar("product_id", 64)
     val purchaseToken = text("purchase_token")
-    val pro = bool("pro")
+    val tokenHash = char("token_hash", 64)
+    val state = varchar("state", 32)
     val expiresAt = timestampWithTimeZone("expires_at").nullable()
-    val verifiedAt = timestampWithTimeZone("verified_at")
+    val autoRenewing = bool("auto_renewing")
+    val acknowledged = bool("acknowledged")
+    val testPurchase = bool("test_purchase")
+    val lastVerifiedAt = timestampWithTimeZone("last_verified_at")
     override val primaryKey = PrimaryKey(userId)
 }

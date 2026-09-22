@@ -3,11 +3,13 @@ package com.geonotes.backend.controllers
 import com.geonotes.backend.api.model.RegisterDeviceRequest
 import com.geonotes.backend.api.model.UpsertMeRequest
 import com.geonotes.backend.domain.service.DeviceService
+import com.geonotes.backend.domain.service.EntitlementService
 import com.geonotes.backend.domain.service.EventService
 import com.geonotes.backend.domain.service.FriendService
 import com.geonotes.backend.domain.service.ShareService
 import com.geonotes.backend.domain.service.UserService
 import com.geonotes.backend.support.DirectTransactionRunner
+import com.geonotes.backend.support.FakePlayPurchaseVerifier
 import com.geonotes.backend.support.FakePushSender
 import com.geonotes.backend.support.InMemoryDeviceRepository
 import com.geonotes.backend.support.InMemoryEntitlementRepository
@@ -44,6 +46,11 @@ class ControllerFixture(maxActiveShares: Int = 20) {
     val sharesController = SharesController(shareService)
     val eventsController = EventsController(eventService)
 
+    val play = FakePlayPurchaseVerifier()
+    val entitlementService = EntitlementService(play, entitlements, userService, clock, packageName = PACKAGE)
+    val entitlementsController = EntitlementsController(entitlementService, clock)
+    val playNotificationsController = PlayNotificationsController(entitlementService)
+
     suspend fun user(id: String, deviceId: String = "$id-device-1") {
         me.upsert(id, UpsertMeRequest(displayName = id.replaceFirstChar { it.uppercase() }))
         devicesController.register(id, RegisterDeviceRequest(deviceId, "fcm-$deviceId", b64(ByteArray(32) { 7 }), "android"))
@@ -55,6 +62,8 @@ class ControllerFixture(maxActiveShares: Int = 20) {
     }
 
     companion object {
+        const val PACKAGE = "com.ars899.geonotes"
+
         fun b64(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)
     }
 }

@@ -2,6 +2,7 @@ package com.geonotes.backend.plugins
 
 import com.geonotes.backend.api.model.CreateShareRequest
 import com.geonotes.backend.api.model.PostEventRequest
+import com.geonotes.backend.api.model.PubSubPushRequest
 import com.geonotes.backend.api.model.RegisterDeviceRequest
 import com.geonotes.backend.api.model.UpsertMeRequest
 import com.geonotes.backend.api.model.VerifyPurchaseRequest
@@ -41,6 +42,9 @@ fun Application.configureValidation() {
                 rule(r.transition.isNotBlank(), "transition is required"),
                 rule(r.occurredAt.isNotBlank(), "occurredAt is required"),
             )
+        }
+        validate<PubSubPushRequest> { r ->
+            rules(rule((r.message.data?.length ?: 0) <= 64 * 1024, "message.data must be at most 64 KiB"))
         }
         validate<VerifyPurchaseRequest> { r ->
             rules(

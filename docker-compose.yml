@@ -1,6 +1,7 @@
 # Production-ish stack for a single Hetzner CX23 (2 vCPU / 4 GB):
 #   caddy (TLS, :80/:443)  →  app (Ktor, :8080 internal)  →  db (PostgreSQL 17, internal only)
 # Usage: cp .env.example .env && edit; put the Firebase service account at ./secrets/firebase-service-account.json
+#        and the Play billing service account at ./secrets/play-service-account.json
 #        docker compose up -d --build
 name: whenhere
 
@@ -39,11 +40,17 @@ services:
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       AUTH_MODE: ${AUTH_MODE:-firebase}
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-service-account.json
+      PLAY_PACKAGE_NAME: ${PLAY_PACKAGE_NAME:-com.ars899.geonotes}
+      PLAY_SERVICE_ACCOUNT_JSON: ${PLAY_SERVICE_ACCOUNT_JSON:-/run/secrets/play-service-account.json}
+      PLAY_ALLOW_TEST_PURCHASES: ${PLAY_ALLOW_TEST_PURCHASES:-true}
+      RTDN_AUDIENCE: ${RTDN_AUDIENCE:-}
+      RTDN_PUSH_SERVICE_ACCOUNT: ${RTDN_PUSH_SERVICE_ACCOUNT:-}
       RATE_LIMIT_EVENTS_PER_MINUTE: ${RATE_LIMIT_EVENTS_PER_MINUTE:-60}
       RATE_LIMIT_INVITES_PER_MINUTE: ${RATE_LIMIT_INVITES_PER_MINUTE:-10}
       JAVA_OPTS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError -Duser.timezone=UTC"
     volumes:
       - ./secrets/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+      - ./secrets/play-service-account.json:/run/secrets/play-service-account.json:ro
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
       interval: 15s

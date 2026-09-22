@@ -1,0 +1,14 @@
+{
+  "kind": "androidpublisher#productPurchaseV2",
+  "productLineItem": [
+    {
+      "productId": "pro_lifetime",
+      "productOfferDetails": { "quantity": 1, "refundableQuantity": 0 }
+    }
+  ],
+  "purchaseStateContext": { "purchaseState": "CANCELLED" },
+  "testPurchaseContext": { "fopType": "TEST" },
+  "orderId": "GPA.3399-0000-1111-33333",
+  "purchaseCompletionTime": "2026-05-20T09:55:00Z",
+  "acknowledgementState": "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED"
+}

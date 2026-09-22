@@ -1,0 +1,16 @@
+{
+  "kind": "androidpublisher#subscriptionPurchaseV2",
+  "startTime": "2026-06-01T09:30:00Z",
+  "subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
+  "acknowledgementState": "ACKNOWLEDGEMENT_STATE_PENDING",
+  "linkedPurchaseToken": "old-monthly-token",
+  "testPurchase": {},
+  "lineItems": [
+    {
+      "productId": "pro_yearly",
+      "expiryTime": "2027-06-01T09:30:00Z",
+      "autoRenewingPlan": { "autoRenewEnabled": true },
+      "offerDetails": { "basePlanId": "yearly" }
+    }
+  ]
+}
